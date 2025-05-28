@@ -13,15 +13,15 @@ This is the offical repo for implemetation of the **C**ontext **A**ware **C**opy
 
 ## CACTI Overview
 
-![MTCM!](/assets/img/MTCMviz.pdf "MTCM Overview")
-
-In contrast to random masking, where some subset of random features are masked, copy masking recycles missing-value patterns actually present in the dataset.
-This approach simulates realistic missingness patterns that provide a source of useful inductive bias during training. Median Truncated Copy Masking extends this strategy for MAE training by truncating the number of features available to the encoder, ensuring it has access to at most the median number of fully observed features in each batch.
-
-![CACTI!](/assets/img/MTCMviz.pdf "CACTI Overview")
+![CACTI!](assets/img/CACTI-method.png "CACTI Overview")
 
 CACTI samples observed missingness patterns to generate masks via Median Truncated Copy Masking (MT-CM) to guide the learning. Features' context are also embedded with a language model. The MT-CM strategy masks out some portion of the observed features from sample $n$ using observed missingness patterns from other samples ($j$) in the same dataset. This is followed by concatenating context information to the remaining (unmasked) features. 
 A transformer encoder processes this data. Then the model adds context information and [MASK] tokens for the missing/masked features before being processed by the decoding transformer which reconstructs the values. \MName optimizes reconstruction loss ($\mathcal{L}_{CACTI}$) over observed and masked features to produce the final imputation estimates.
+
+![MTCM!](assets/img/MTCMviz.png "MTCM Overview")
+
+In contrast to random masking, where some subset of random features are masked, copy masking recycles missing-value patterns actually present in the dataset.
+This approach simulates realistic missingness patterns that provide a source of useful inductive bias during training. Median Truncated Copy Masking extends this strategy for MAE training by truncating the number of features available to the encoder, ensuring it has access to at most the median number of fully observed features in each batch.
 
 ## Installation
 Please install the following conda environment to run CACTI:
