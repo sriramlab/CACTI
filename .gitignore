@@ -1,0 +1,35 @@
+# ignore ds store
+.DS_Store
+
+# Ignore OS generated files
+**/.DS_Store
+
+# Byte-compiled /  optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# text editor (vi / emacs) intermediate/swap files
+*~
+*.*#
+*.swp
+
+# Ignoring Core Dumps
+**/core.*
+
+# Ignore log/ckpt folders
+lightning_logs/
+checkpoints/
+wandb/
+scratch.py
+.ipynb_checkpoints
+
+# ignore temp jpeg
+*.jpg
+
+# ignore model checkpoints
+**/*.ckpt
+
+# ignore notebooks [for now]
+notebooks/
+scripts/
