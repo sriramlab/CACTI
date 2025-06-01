@@ -11,7 +11,7 @@
 
 This is the offical repo for implemetation of the **C**ontext **A**ware **C**opy masked **T**abular **I**mputation (CACTI). The code here will allow users to run CACTI on any dataset and also reproduce its benchmakring results in the ICML'25 spotlight paper: "*CACTI: Leveraging Copy Masking and Contextual Information to Improve Tabular Data Imputation*."
 
-## CACTI Overview
+## 🌵 CACTI Overview
 
 ![CACTI!](assets/img/CACTI-method.png "CACTI Overview")
 
@@ -23,7 +23,7 @@ A transformer encoder processes this data. Then the model adds context informati
 In contrast to random masking, where some subset of random features are masked, copy masking recycles missing-value patterns actually present in the dataset.
 This approach simulates realistic missingness patterns that provide a source of useful inductive bias during training. Median Truncated Copy Masking extends this strategy for MAE training by truncating the number of features available to the encoder, ensuring it has access to at most the median number of fully observed features in each batch.
 
-## Installation
+## 🐍 Installation
 Please install the following conda environment to run CACTI:
 ``` python
 conda env create -n cacti -f environment.yml
@@ -37,7 +37,7 @@ pip install ucimlrepo==0.0.7
 pip install hyperimpute
 ```
 
-## Generating UCI ML Datasets
+## 🗄️ Generating UCI ML Datasets
 Run the following create all 10 UCI ML dataset, simmulate the 3 missingness scenarios, make train/test splits:
 
 ``` python
@@ -59,7 +59,7 @@ for DS in bike obesity california default income letter magic shoppers spam stud
 done
 ```
 
-## Usage
+## ✨ Usage
 To train and make inference on training dataset only use the following command stcuture:
 ``` python
 python train.py --project <PROJECT_NAME> --model CACTI \
@@ -131,7 +131,7 @@ for mtype in "${scenarios[@]}"; do
 done
 ```
 
-### Calculate imputation metrics
+### 🔬 Calculate imputation metrics
 
 To calculate the final imputation performacne metrics use the following script:
 ```bash
@@ -144,7 +144,7 @@ python tools/uci_scoreeval.py --data_path <DATA_DIR>/uciml/ \
     --method CACTI-cp90-ne10-nd4-es64     
 ```
 
-## Citation
+## 📚 Citation
 If you use this software in your research or find some of the key contributions of this work helpful, please cite our work as follows:
 ```bibtex
 @inproceedings{gorla2025cacti,
