@@ -1,4 +1,4 @@
-# 🌵 CACTI: Context Aware Copy maksed Tabular Imputation
+# 🌵 CACTI: Context Aware Copy Masked Tabular Imputation
 
 <!-- badges: start -->
 ![release: v0.1.0](https://img.shields.io/badge/release-v0.1.0-moss)
