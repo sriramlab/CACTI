@@ -9,7 +9,7 @@
 <!-- badges: end -->
 
 
-This is the offical repo for implemetation of the **C**ontext **A**ware **C**opy masked **T**abular **I**mputation (CACTI). The code here will allow users to run CACTI on any dataset and also reproduce its benchmakring results in the ICML'25 spotlight paper: "*CACTI: Leveraging Copy Masking and Contextual Information to Improve Tabular Data Imputation*."
+This is the offical repo for implemetation of the **C**ontext **A**ware **C**opy masked **T**abular **I**mputation (CACTI). The code here will allow users to run CACTI on any dataset and also reproduce its benchmakring results in the ICML'25 spotlight paper: "[CACTI: Leveraging Copy Masking and Contextual Information to Improve Tabular Data Imputation](https://arxiv.org/abs/2506.02306)."
 
 ## 🌵 CACTI Overview
 
