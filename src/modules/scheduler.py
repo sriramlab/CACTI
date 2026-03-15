@@ -12,7 +12,7 @@ class WarmupCosineAnnealingScheduler(_LRScheduler):
         super(WarmupCosineAnnealingScheduler, self).__init__(optimizer, last_epoch)
 
     def get_lr(self):
-        print(self.last_epoch)
+        # print(self.last_epoch)
         if self.last_epoch < self.warmup_epochs:
             # Linear warmup
             warmup_factor = (self.last_epoch + 1) / self.warmup_epochs

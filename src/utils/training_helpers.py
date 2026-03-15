@@ -6,6 +6,7 @@ from time import time, sleep
 import numpy as np
 from pandas import read_csv as pdreader
 import pandas as pd
+import warnings
 
 def setup_environment(args):
     """
@@ -45,14 +46,26 @@ def setup_environment(args):
     # Set device to GPU if CUDA is available
     args.device = torch.device("cuda")
 
+    # Set random seeds for reproducibility
+    if hasattr(args, 'seed') and args.seed is not None:
+        torch.manual_seed(args.seed)
+        np.random.seed(args.seed)
+        torch.cuda.manual_seed_all(args.seed)
+
     # set checkpoint path
     args.checkpoint_path = None
     if args.checkpoint_id:
         args.checkpoint_path = '/'.join([args.log_path, args.checkpoint_id])
 
-def _load_data(fpath):        
+def _worker_init_fn(worker_id):
+    seed = torch.initial_seed() % 2**32
+    np.random.seed(seed + worker_id)
+
+def _load_data(fpath):
     if fpath.endswith('.npz'):
-        self.fixed_mask = np.load(fpath) 
+        tmp_data = np.load(fpath)
+        colnames = list(tmp_data.dtype.names)
+        return tmp_data, colnames
     else:
         tmp_data = pdreader(fpath, sep='\t' if fpath.endswith('.tsv') else ',').to_numpy()
     
@@ -88,18 +101,10 @@ def load_eval_data(fpath, eps=1e-6):
     raw_data, colnames = _load_data(fpath)
 
     print(f"Loaded eval dataset of shape: {raw_data.shape} ")
-    samples = raw_data.shape[0]
-    features = raw_data.shape[1]
-
-    # data, minscale, maxscale = _rescale(raw_data)
-    # data = (raw_data - minscale) / (maxscale - minscale + eps)
-    minscale, maxscale = _getscales(raw_data)
 
     return dict(
         data = raw_data,
         colnames = colnames,
-        minscale = minscale,
-        maxscale = maxscale,
         fname = fpath.strip().split('/')[-1]
     )
 
@@ -116,3 +121,11 @@ def save_predictions(predictions, cnames, spath, sname, index=None):
     results.to_csv(ofname, sep='\t', index=False)
 
     print('Predictions saved to:', f'{ofname}')
+
+def train_test_split_indices(total_samples, test_proportion):
+        indices = np.arange(total_samples)
+        np.random.shuffle(indices)
+        test_size = int(total_samples * test_proportion)
+        test_indices = indices[:test_size]
+        train_indices = indices[test_size:]
+        return train_indices, test_indices

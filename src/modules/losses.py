@@ -2,6 +2,7 @@ import torch.nn.functional as F
 from torch.cuda.amp import GradScaler
 from torch.nn.utils import clip_grad_norm_
 import torch
+import numpy as np
 
 class LossFunctions:
     @staticmethod
@@ -61,12 +62,12 @@ class AMPBackpropOptimizer:
             self._scaler.unscale_(optimizer)
             if clip_grad and parameters is not None:
                 return clip_fn(parameters, clip_grad) if clip_fn else clip_grad_norm_(parameters, clip_grad)
-            return _get_grad_norm(parameters)
+            return self._get_grad_norm(parameters)
         else:
             # If no scaler, just clip gradients without unscaling
             if clip_grad and parameters is not None:
                 return clip_fn(parameters, clip_grad) if clip_fn else torch.nn.utils.clip_grad_norm_(parameters, clip_grad)
-            return _get_grad_norm(parameters)
+            return self._get_grad_norm(parameters)
 
     def step_optimizer(self, optimizer):
         if self._scaler is not None:

@@ -4,6 +4,8 @@ import numpy as np
 from tqdm import tqdm
 import os
 import time
+import warnings
+import sys
 
 from src.models.cactilabllossctx import CACTImodel
 from src.loaders.embedcopyloader import EmbedCopyMaskedDataset
@@ -11,12 +13,16 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from src.modules.losses import LossFunctions, AMPBackpropOptimizer
 from src.modules.scheduler import StepWiseWarmupCosineAnnealingScheduler
-from src.utils.checkpoint import CheckpointHandler  
-from src.utils.summary import ModelSummary  
+from src.utils.checkpoint import CheckpointHandler
+from src.utils.summary import ModelSummary
+from src.utils.training_helpers import _worker_init_fn
 
+
+__version__ = "1.0.0"
 
 class CACTIabl:
     def __init__(self, args, **kwargs):
+        print(f"CACTIabl v{__version__}")
         self.batch_size = args.batch_size
         self.min_lr = args.min_lr if args.min_lr else 5e-6
         self.lr = args.lr if args.lr else 0.001
@@ -30,6 +36,7 @@ class CACTIabl:
         self.device = args.device
         self.num_workers = args.num_workers
         self.eps = 1e-6
+        self.weight_decay = args.weight_decay if args.weight_decay else 0.001
         self.embeddings = args.embeddings
         self.platau_counter = 0
         self.platau_patience = float('inf') # set to off, no early stopping
@@ -79,7 +86,8 @@ class CACTIabl:
         Return a dictionary of the model and training hyperparameters
         """
         model_hyperparameters = {k: v for k, v in vars(self.model).items() if not isinstance(v, torch.nn.Module) and not isinstance(v, torch.Tensor)}
-        return { # FIXME: to include things like embed size, heads, depth etc
+        return {
+            'version': __version__,
             'batch_size': self.batch_size,
             'min_lr': self.min_lr,
             'lr': self.lr,
@@ -110,14 +118,15 @@ class CACTIabl:
             dataset, batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=_worker_init_fn
         )
         
         # Move models to device
         self.model.to(self.device)
 
         # Init Optimizers       
-        optimizer = AdamW(self.model.parameters(), lr=self.lr, betas=(0.9, 0.95))
+        optimizer = AdamW(self.model.parameters(), lr=self.lr, betas=(0.9, 0.95), weight_decay=self.weight_decay)
         scheduler = StepWiseWarmupCosineAnnealingScheduler(
             optimizer=optimizer,
             warmup_epochs=self.warmup_epochs,  # Number of warmup epochs
@@ -140,6 +149,10 @@ class CACTIabl:
         mstats.summarize()
         del mstats
         
+        # Warmup sanity check
+        if self.warmup_epochs >= self.epochs * 0.5:
+            warnings.warn(f"warmup_epochs ({self.warmup_epochs}) is >= 50% of total epochs ({self.epochs}). Best loss may occur during warmup and not be checkpointed.")
+
         # Start training
         self.model.train()
         best_loss = float('inf')
@@ -203,21 +216,17 @@ class CACTIabl:
             current_lr = scheduler.get_last_lr()
             # print(f"Epoch {epoch} :: Learning Rate: {current_lr}")
 
-            if avg_loss < best_loss - self.loss_tol or self.warmup_epochs > epoch: # early stopping check
-                self.platau_counter = 0
-                best_loss = avg_loss                    
-                # Save checkpoint if avg_loss is the best so far
-                if self.checkpoint_handler is not None:
+            if avg_loss < best_loss:
+                best_loss = avg_loss
+                if self.checkpoint_handler is not None and epoch >= self.warmup_epochs:
                     self.checkpoint_handler.save_checkpoint(epoch, optimizer)
-            else: # FIXME: checkpoint every 10th model so less IO when training large models 
-                if self.platau_counter >= self.platau_patience:
-                    # print(f"early stopping intiated at {epoch} EPOCH :: delta avg loss {best_loss} < {self.loss_tol} for {self.patience} EPOCHS")
-                    if os.path.exists(self.checkpoint_path):
-                        self.checkpoint_handler.save_checkpoint(epoch, optimizer)
-                    # break
-                else:
-                    self.platau_counter+=1
-        
+
+        # Warn if no checkpoint was saved
+        if self.checkpoint_handler is not None:
+            symlink_path = os.path.join(self.checkpoint_handler.checkpoint_dir, "last.pth")
+            if not os.path.exists(symlink_path):
+                warnings.warn(f"No checkpoint was saved during training. Model never improved after warmup epoch {self.warmup_epochs}. Consider reducing --warmup_epochs.")
+
         return self
 
 
@@ -234,7 +243,8 @@ class CACTIabl:
         dataloader = DataLoader(
             dataset, batch_size=1,
             shuffle=False,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=_worker_init_fn
         )
 
         # set to eval 
@@ -291,8 +301,18 @@ class CACTIabl:
         self.min_scale = obs_dict['minscale']
         self.max_scale = obs_dict['maxscale']
 
-        return self.fit(obs_data).transform(obs_data)
-    
+        # Fit
+        _ = self.fit(obs_data)
+
+        # Infer with best loss model; if exists
+        if self.checkpoint_handler is not None:
+            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/last.pth")
+            self.model.load_state_dict(best_ckpt['model_state_dict'])
+            print(f"Loaded best checkpoint model from Epoch {best_ckpt['epoch']}")
+            del best_ckpt
+
+        return self.transform(obs_data)
+
     def train_model(self, obs_dict):
         obs_data = obs_dict['data']
 
@@ -308,14 +328,22 @@ class CACTIabl:
         return self.fit(obs_data)
     
     def load_transform(self, checkpoint_path, obs_dict):
+        obs_data = obs_dict['data']
         if isinstance(obs_data, np.ndarray):
             obs_data = torch.tensor(obs_data, dtype=torch.float32)
         else:
             obs_data = torch.tensor(obs_data.values, dtype=torch.float32)
 
+        # Set min-max scale
+        self.min_scale = obs_dict['minscale']
+        self.max_scale = obs_dict['maxscale']
+
         # Load checkpoint
-        if os.path.exists(checkpoint_path):
-            self.checkpoint_handler.load_checkpoint(checkpoint_path, optimizer=None)
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(ckpt['model_state_dict'])
+        del ckpt
 
         # Apply transform
         return self.transform(obs_data)

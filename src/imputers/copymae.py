@@ -2,6 +2,9 @@ import torch
 import torch.nn as nn
 import numpy as np
 from tqdm import tqdm
+import os
+import warnings
+import sys
 
 from src.models.cmae import CMAE
 from src.loaders.copyloader import CopyMaskedDataset
@@ -9,12 +12,16 @@ from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from src.modules.losses import LossFunctions, AMPBackpropOptimizer
 from src.modules.scheduler import StepWiseWarmupCosineAnnealingScheduler
-from src.utils.checkpoint import CheckpointHandler  
-from src.utils.summary import ModelSummary  
+from src.utils.checkpoint import CheckpointHandler
+from src.utils.summary import ModelSummary
+from src.utils.training_helpers import train_test_split_indices, _worker_init_fn
 
+
+__version__ = "1.0.0"
 
 class CopyMAE:
     def __init__(self, args, **kwargs):
+        print(f"CMAE v{__version__}")
         self.batch_size = args.batch_size
         self.min_lr = args.min_lr if args.min_lr else 5e-6
         self.lr = args.lr if args.lr else 0.001
@@ -28,11 +35,24 @@ class CopyMAE:
         self.device = args.device
         self.num_workers = args.num_workers
         self.eps = 1e-6
+        self.weight_decay = args.weight_decay if args.weight_decay else 0.001
+        self.args = args
+
+        # model spec tune
+        self.embed_dim = args.embed_dim
+        self.nencoder = args.nencoder
+        self.ndecoder = args.ndecoder
+        self.nhead = self.embed_dim//8 if self.embed_dim >= 64 else 4
 
         # init model
         self.model = CMAE(
             table_len=len(self.feats),
-            mask_ratio=self.mask_ratio
+            mask_ratio=self.mask_ratio,
+            embed_dim=self.embed_dim,
+            depth=self.nencoder,
+            num_heads=self.nhead,
+            decoder_depth=self.ndecoder,
+            decoder_num_heads=self.nhead
         )
 
         # Directory for saving checkpoints
@@ -51,6 +71,7 @@ class CopyMAE:
         """
         model_hyperparameters = {k: v for k, v in vars(self.model).items() if not isinstance(v, torch.nn.Module) and not isinstance(v, torch.Tensor)}
         return {
+            'version': __version__,
             'batch_size': self.batch_size,
             'min_lr': self.min_lr,
             'lr': self.lr,
@@ -76,19 +97,35 @@ class CopyMAE:
         for i, col in enumerate(self.feats):
             X[:, i] = (X[:, i] - self.min_scale[i]) / (self.max_scale[i] - self.min_scale[i] + self.eps)
 
+        if self.args.pval:
+            train_idx, val_idx = train_test_split_indices(X.shape[0], self.args.pval)
+            X_val = X[val_idx,:]
+            X = X[train_idx,:]
+
         dataset = CopyMaskedDataset(X, self.mask_ratio)
         dataloader = DataLoader(
             dataset, batch_size=self.batch_size,
             shuffle=True,
             num_workers=self.num_workers,
-            pin_memory=True
+            pin_memory=True,
+            worker_init_fn=_worker_init_fn
         )
-        
+
+        if self.args.pval:
+            dataset_val = CopyMaskedDataset(X_val, self.mask_ratio)
+            dataloader_val = DataLoader(
+                dataset_val, batch_size=self.batch_size,
+                shuffle=True,
+                num_workers=self.num_workers,
+                pin_memory=True,
+                worker_init_fn=_worker_init_fn
+            )
+
         # Move models to device
         self.model.to(self.device)
 
-        # init Optimizers       
-        optimizer = AdamW(self.model.parameters(), lr=self.lr, betas=(0.9, 0.95))
+        # init Optimizers
+        optimizer = AdamW(self.model.parameters(), lr=self.lr, betas=(0.9, 0.95), weight_decay=self.weight_decay)
         scheduler = StepWiseWarmupCosineAnnealingScheduler(
             optimizer=optimizer,
             warmup_epochs=self.warmup_epochs,  # Number of warmup epochs
@@ -110,14 +147,28 @@ class CopyMAE:
         mstats = ModelSummary(self.model)
         mstats.summarize()
         del mstats
-        
+
+        # Warmup sanity check
+        if self.warmup_epochs >= self.epochs * 0.5:
+            warnings.warn(f"warmup_epochs ({self.warmup_epochs}) is >= 50% of total epochs ({self.epochs}). Best loss may occur during warmup and not be checkpointed.")
+
         # Start training
         self.model.train()
         best_loss = float('inf')
+
+        # Dummy forward/backward pass to initialize optimizer state:
+        optimizer.zero_grad()
+        optimizer.step()
+        scheduler.step()
+        optimizer.zero_grad()
+
         for epoch in range(start_epoch, self.epochs):
+            if not self.model.training:
+                self.model.train()
             optimizer.zero_grad()
             total_loss = 0
             itr = 0
+            total_loss_val = 0
             # dataloader with tqdm for better logging
             progress_bar = tqdm(enumerate(dataloader), total=len(dataloader), desc=f"Epoch {epoch}", unit=" iters")
 
@@ -133,19 +184,19 @@ class CopyMAE:
                     loss, _ = self.model(batch['table'], batch['miss_map'], batch['mask_map'])
                     loss_value = loss.item()
                     total_loss += loss_value
-                
+
                 # safe check
                 if not torch.all(torch.isfinite(loss)) :
-                    warnings.warn("Found NaN or Inf Loss!")
-                    print(f"Loss is {loss_value}, stopping training")
-                    sys.exit(1)
+                    warnings.warn(f"Found NaN or Inf Loss! Loss is {loss_value}")
+                    print(f"Skipping this batch {itr} in Epoch {epoch} ...")
+                    continue
 
                 # Update the progress bar description with the loss value
                 progress_bar.set_postfix(MSE_loss=loss_value, RMSE_loss=loss_value ** 0.5)
 
                 # backwards
-                backprop_optimizer(loss, 
-                    optimizer, 
+                backprop_optimizer(loss,
+                    optimizer,
                     clip_grad = self.grad_clip,
                     parameters=self.model.parameters()
                 )
@@ -161,13 +212,44 @@ class CopyMAE:
 
             # Log the updated learning rate
             current_lr = scheduler.get_last_lr()
-            print(f"Epoch {epoch} :: Learning Rate: {current_lr}")
+            # print(f"Epoch {epoch} :: Learning Rate: {current_lr}")
 
-            # Save checkpoint if avg_loss is the best so far
-            if self.checkpoint_handler is not None and avg_loss < best_loss:
-                best_loss = avg_loss
-                self.checkpoint_handler.save_checkpoint(epoch, optimizer)
-        
+            ##### Val eval; if requested #####
+            if self.args.pval:
+                with torch.no_grad():
+                    self.model.eval()
+                    progress_bar_val = tqdm(enumerate(dataloader_val), total=len(dataloader_val), desc=f"Val Epoch {epoch}", unit=" iters")
+
+                    for itr, batch in progress_bar_val:
+                        if isinstance(batch, dict):
+                            batch = {key: value.to(self.device, non_blocking=True) for key, value in batch.items()}
+                        else:
+                            batch = batch.to(self.device, non_blocking=True)
+
+                        loss_val, _ = self.model(batch['table'], batch['miss_map'], batch['mask_map'])
+                        total_loss_val += loss_val.item() ** 0.5
+
+                avg_loss_val = (total_loss_val / (itr + 1))
+                print(f"Val Epoch {epoch} :: Average RMSE loss: {avg_loss_val}")
+            #####
+
+            if self.args.pval:
+                if avg_loss_val < best_loss:
+                    best_loss = avg_loss_val
+                    if self.checkpoint_handler is not None and epoch >= self.warmup_epochs:
+                        self.checkpoint_handler.save_checkpoint(epoch, optimizer)
+            else:
+                if avg_loss < best_loss:
+                    best_loss = avg_loss
+                    if self.checkpoint_handler is not None and epoch >= self.warmup_epochs:
+                        self.checkpoint_handler.save_checkpoint(epoch, optimizer)
+
+        # Warn if no checkpoint was saved
+        if self.checkpoint_handler is not None:
+            symlink_path = os.path.join(self.checkpoint_handler.checkpoint_dir, "last.pth")
+            if not os.path.exists(symlink_path):
+                warnings.warn(f"No checkpoint was saved during training. Model never improved after warmup epoch {self.warmup_epochs}. Consider reducing --warmup_epochs.")
+
         return self
 
 
@@ -235,20 +317,49 @@ class CopyMAE:
         self.min_scale = obs_dict['minscale']
         self.max_scale = obs_dict['maxscale']
 
-        return self.fit(obs_data).transform(obs_data)
+        # Fit
+        _ = self.fit(obs_data)
+
+        # Infer with best loss model; if exists
+        if self.checkpoint_handler is not None:
+            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/last.pth")
+            self.model.load_state_dict(best_ckpt['model_state_dict'])
+            print(f"Loaded best checkpoint model from Epoch {best_ckpt['epoch']}")
+            del best_ckpt
+
+        return self.transform(obs_data)
 
     def train_model(self, obs_dict):
-        raise NotImplementedError
-    
+        obs_data = obs_dict['data']
+
+        if isinstance(obs_data, np.ndarray):
+            obs_data = torch.tensor(obs_data, dtype=torch.float32)
+        else:
+            obs_data = torch.tensor(obs_data.values, dtype=torch.float32)
+
+        # Set min-max scale for training
+        self.min_scale = obs_dict['minscale']
+        self.max_scale = obs_dict['maxscale']
+
+        if self.checkpoint_handler:
+            self.checkpoint_handler.hyperparameters = self.get_hyperparameters()
+
+        return self.fit(obs_data)
+
     def load_transform(self, checkpoint_path, obs_data):
         if isinstance(obs_data, np.ndarray):
             obs_data = torch.tensor(obs_data, dtype=torch.float32)
         else:
             obs_data = torch.tensor(obs_data.values, dtype=torch.float32)
 
-        # Load checkpoint
-        if os.path.exists(checkpoint_path):
-            self.checkpoint_handler.load_checkpoint(checkpoint_path, optimizer=None)
+        # Load checkpoint and restore scales
+        if not os.path.exists(checkpoint_path):
+            raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
+        ckpt = torch.load(checkpoint_path, map_location=self.device)
+        self.model.load_state_dict(ckpt['model_state_dict'])
+        self.min_scale = ckpt['hyperparameters']['min_scale']
+        self.max_scale = ckpt['hyperparameters']['max_scale']
+        del ckpt
 
         # Apply transform
         return self.transform(obs_data)

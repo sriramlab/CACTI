@@ -33,7 +33,7 @@ class EmbedCopyMaskedDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int):
-        datarow = self.data[idx]
+        datarow = self.data[idx].clone()
         missing_cols = self.missing[idx]
 
         ### Copy Masking

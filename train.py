@@ -6,7 +6,7 @@ from time import time, sleep
 import numpy as np
 from pandas import read_csv as pdreader
 import pandas as pd
-from src.utils.training_helpers import setup_environment, _get_ctxembed_size, _load_data, _rescale, _getscales, load_eval_data, save_predictions
+from src.utils.training_helpers import setup_environment, _get_ctxembed_size, _load_data, _rescale, _getscales, load_eval_data, save_predictions, _worker_init_fn
 
 def args_parser():
     """
@@ -16,9 +16,7 @@ def args_parser():
     parser.add_argument('--model', type=str, required=True)
     parser.add_argument('--project', type=str, default=None, required=False)
     parser.add_argument('--tabular', type=str, default=None)
-    parser.add_argument('--tabularcm', type=str, default=None)
-    parser.add_argument('--tabular_infer', type=str, default=None)
-    parser.add_argument('--finfer', type=str, default=None)
+    parser.add_argument('--tabular_infer', type=str, nargs='+', default=None)
     parser.add_argument('--batch_size', type=int, default=128)
     parser.add_argument('--epochs', type=int, default=100)
     parser.add_argument('--warmup_epochs', type=int, default=50)
@@ -46,12 +44,14 @@ def args_parser():
     parser.add_argument('--loss_type', type=str, default=None)
     parser.add_argument('--ctx_prop', type=float, default=None)
     parser.add_argument('--precision', type=str, default='32-true')
+    parser.add_argument('--seed', type=int, default=42)
+    parser.add_argument('--pval', type=float, default=None)
     parser.add_argument('--save_path', type=str, default=None)
 
     args = parser.parse_args()
 
     description = f'{args.model}'
-    for conf in ['tabular', 'tabularcm']: # , 'labels'
+    for conf in ['tabular']:
         opt = getattr(args, conf)
         if opt is not None:
             opt = opt.strip('/')
@@ -67,39 +67,29 @@ def args_parser():
     return args
 
 def load_data(args):
-    modalities = [args.tabular, args.tabularcm]
-    data_paths = [mod for mod in modalities if mod is not None]
-    assert len(data_paths)
-    data_path = data_paths[0]
+    assert args.tabular is not None, "Must provide --tabular data path!"
 
     # Get and Set colembed dim
     if args.embeddings is not None and args.cembed_size is None:
        args.cembed_size =  _get_ctxembed_size(args.embeddings)
        print(f"Automatically set args.cembed_size to {args.cembed_size}")
 
-    if args.tabular:
-        raw_data, colnames = _load_data(args.tabular)
+    raw_data, colnames = _load_data(args.tabular)
 
-        print(f"Loaded dataset of shape: {raw_data.shape} ")
-        samples = raw_data.shape[0]
-        features = raw_data.shape[1]
+    print(f"Loaded dataset of shape: {raw_data.shape} ")
+    samples = raw_data.shape[0]
+    features = raw_data.shape[1]
 
-        # data, minscale, maxscale = _rescale(raw_data)
-        minscale, maxscale = _getscales(raw_data)
+    # data, minscale, maxscale = _rescale(raw_data)
+    minscale, maxscale = _getscales(raw_data)
 
-        return dict(
-            data = raw_data,
-            minscale = minscale,
-            maxscale = maxscale,
-            colnames = colnames,
-            fname = args.tabular.strip().split('/')[-1]
-        )
-
-    elif args.tabularcm:
-        raise NotImplementedError
-
-    else:
-        raise NotImplementedError
+    return dict(
+        data = raw_data,
+        minscale = minscale,
+        maxscale = maxscale,
+        colnames = colnames,
+        fname = args.tabular.strip().split('/')[-1]
+    )
 
 
 def load_model(args, data_dict):
@@ -201,14 +191,16 @@ if __name__ == "__main__":
         # trainer = resume_training(args, model, loaders)
 
     # TRAIN and INFER
-    if args.resume_checkpoint is None:
+    elif not args.train_only and args.resume_checkpoint is None:
+        if args.checkpoint_path is None:
+            raise ValueError("--checkpoint_id and --log_path are required for train+eval mode!")
         Model, imputed_data = train_eval(model, data_dict)
-    elif args.resume_checkpoint:
+    elif not args.train_only and args.resume_checkpoint:
         # FIXME: enable resume for ckpt
         raise NotImplementedError
         # trainer = resume_training(args, model, loaders)
     else:
-        ValueError("---No checkpoint to resume---")
+        raise ValueError("---No checkpoint to resume---")
 
     # SAVE train data imputed values
     if args.save_path:
@@ -216,20 +208,15 @@ if __name__ == "__main__":
             args.save_path, data_dict['fname'])
 
 
-    # SAVE other (eg. val) data imputed values
-    ### FIXME: Clean this up and make it more modular
-    infer_modalities = [args.tabular_infer]
-    infer_data_paths = [mod for mod in infer_modalities if mod is not None]
-    if len(infer_data_paths) > 0:
-        # load eval data
-        data_eval_dict = load_eval_data(infer_data_paths[0])
+    # Inference on eval data (eg. val splits)
+    if args.tabular_infer:
+        for infer_data_path in args.tabular_infer:
+            data_eval_dict = load_eval_data(infer_data_path)
+            imputed_eval = Model.transform(data_eval_dict['data'])
 
-        imputed_eval = Model.transform(data_eval_dict['data'])
-
-        if args.save_path:
-            save_predictions(imputed_eval, data_eval_dict['colnames'], 
-                args.save_path, data_eval_dict['fname'])
-    ###
+            if args.save_path:
+                save_predictions(imputed_eval, data_eval_dict['colnames'],
+                    args.save_path, data_eval_dict['fname'])
 
 
     print('---Done!---')

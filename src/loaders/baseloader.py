@@ -17,7 +17,7 @@ class BaseDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int):
-        datarow = self.data[idx]
+        datarow = self.data[idx].clone()
         missing_cols = self.missing[idx]
         datarow[missing_cols] = -1.
         fid_tensor = torch.tensor(idx)
@@ -57,7 +57,7 @@ class ContextBaseDataset(Dataset):
         return len(self.data)
 
     def __getitem__(self, idx: int):
-        datarow = self.data[idx]
+        datarow = self.data[idx].clone()
         missing_cols = self.missing[idx]
         datarow[missing_cols] = -1.
         fid_tensor = torch.tensor(idx)

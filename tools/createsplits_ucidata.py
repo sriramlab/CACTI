@@ -33,7 +33,9 @@ def parse_arguments():
     
     parser.add_argument('--dpath', type=str, default=None,
                         help="Path to the data directory for datasets requiring manual download. (default: None)")
-                
+
+    parser.add_argument('--seed', type=int, default=42,
+                        help="Random seed for reproducibility. (default: 42)")
 
     return parser.parse_args()
 
@@ -455,6 +457,8 @@ def save_files(output_dir, data_dict, colnames, colinfo, cats_df, replicate=None
 
 if __name__ == "__main__":
     args = parse_arguments()
+
+    np.random.seed(args.seed)
 
     valid_list = ['california', 'magic', 'letter', 'spam', 'obesity', 'bike', 'default', 'income', 'students', 'shoppers']
     valid_mech = ['MCAR', 'MAR', 'MNAR'] #, 'MNARsm']

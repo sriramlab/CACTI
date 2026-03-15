@@ -245,8 +245,8 @@ if __name__ == "__main__":
                             'RMSE_STD': std_rmse,
                             'RMSE_SE': se_rmse
                         })
-                    except:
-                        print(f'{args.impute_path}/{args.method}/{dataset_name}/{dataset_name}-{miss_type_name}-{mask_ratio}/p{phase}-predicted-{i}.tsv not found')
+                    except Exception as e:
+                        print(f'Error for {dataset_name}-{miss_type_name}-{mask_ratio}/p{phase}-{i}: {e}')
 
 
     # Convert the list of dictionaries into a DataFrame
