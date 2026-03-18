@@ -179,8 +179,8 @@ class CMAE(nn.Module):
         """
         data: [N, 1, L]
         pred: [N, L, 1]
-        miss_mask: [N, L] ; 1 is obs, 0 is miss
-        obs_mask: [N, L] ; 1 is obs, 0 is miss
+        miss_mask: [N, L] ; 1 is miss, 0 is obs
+        recon_mask: [N, L] ; 1 is obs (in context), 0 is not
         """
         B, _, L = data.shape
 
@@ -196,9 +196,9 @@ class CMAE(nn.Module):
     def forward(self, x, miss_map, copy_mask):
 	
         # Encode latent
-        if self.training:
+        if copy_mask is not None:
             latent, restore_map, obs_mask = self.forward_encoder(x, copy_mask)
-        else: 
+        else:
             latent, restore_map, obs_mask = self.forward_encoder(x, miss_map)
 
         # Get Decoder latent 

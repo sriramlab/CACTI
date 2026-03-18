@@ -16,7 +16,7 @@ from src.utils.summary import ModelSummary
 from src.utils.training_helpers import train_test_split_indices, _worker_init_fn
 
 
-__version__ = "1.0.0"
+__version__ = "1.1.0"
 
 class CACTI:
     def __init__(self, args, **kwargs):
@@ -91,7 +91,8 @@ class CACTI:
             'device': self.device,
             'num_workers': self.num_workers,
             'eps': self.eps,
-            'model_hyperparameters': model_hyperparameters 
+            'args': self.args,
+            'model_hyperparameters': model_hyperparameters
         }
 
     def fit(self, obs_data: torch.Tensor, resume_from_checkpoint=False):
@@ -145,7 +146,7 @@ class CACTI:
         # Load checkpoint if resuming
         start_epoch = 0
         if resume_from_checkpoint:
-            checkpoint_path = os.path.join(self.checkpoint_path, "last.pth")
+            checkpoint_path = os.path.join(self.checkpoint_path, "best.pth")
             if os.path.exists(checkpoint_path):
                 start_epoch = self.checkpoint_handler.load_checkpoint(checkpoint_path, self.optimizer)
 
@@ -226,9 +227,9 @@ class CACTI:
                             batch = batch.to(self.device, non_blocking=True)
 
                         loss_val, _ = self.model(batch['table'], batch['miss_map'], batch['mask_map'], batch['info_embed'])
-                        total_loss_val += loss_val.item() ** 0.5
+                        total_loss_val += loss_val.item()
 
-                avg_loss_val = (total_loss_val / (itr + 1))
+                avg_loss_val = (total_loss_val / (itr + 1)) ** 0.5
                 print(f"Val Epoch {epoch} :: Average RMSE loss: {avg_loss_val}")
             #####
 
@@ -245,7 +246,7 @@ class CACTI:
 
         # Warn if no checkpoint was saved
         if self.checkpoint_handler is not None:
-            symlink_path = os.path.join(self.checkpoint_handler.checkpoint_dir, "last.pth")
+            symlink_path = os.path.join(self.checkpoint_handler.checkpoint_dir, "best.pth")
             if not os.path.exists(symlink_path):
                 warnings.warn(f"No checkpoint was saved during training. Model never improved after warmup epoch {self.warmup_epochs}. Consider reducing --warmup_epochs.")
 
@@ -319,12 +320,15 @@ class CACTI:
         self.min_scale = obs_dict['minscale']
         self.max_scale = obs_dict['maxscale']
 
+        if self.checkpoint_handler is not None:
+            self.checkpoint_handler.hyperparameters = self.get_hyperparameters()
+
         # Fit
         _ = self.fit(obs_data)
 
         # Infer with best loss model; if exists
         if self.checkpoint_handler is not None:
-            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/last.pth")
+            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/best.pth")
             self.model.load_state_dict(best_ckpt['model_state_dict'])
             print(f"Loaded best checkpoint model from Epoch {best_ckpt['epoch']}")
             del best_ckpt
@@ -343,24 +347,24 @@ class CACTI:
         self.min_scale = obs_dict['minscale']
         self.max_scale = obs_dict['maxscale']
 
+        if self.checkpoint_handler is not None:
+            self.checkpoint_handler.hyperparameters = self.get_hyperparameters()
+
         return self.fit(obs_data)
     
-    def load_transform(self, checkpoint_path, obs_dict):
-        obs_data = obs_dict['data']
+    def load_transform(self, checkpoint_path, obs_data):
         if isinstance(obs_data, np.ndarray):
             obs_data = torch.tensor(obs_data, dtype=torch.float32)
         else:
             obs_data = torch.tensor(obs_data.values, dtype=torch.float32)
 
-        # Set min-max scale
-        self.min_scale = obs_dict['minscale']
-        self.max_scale = obs_dict['maxscale']
-
-        # Load checkpoint
+        # Load checkpoint and restore scales
         if not os.path.exists(checkpoint_path):
             raise FileNotFoundError(f"Checkpoint not found: {checkpoint_path}")
         ckpt = torch.load(checkpoint_path, map_location=self.device)
         self.model.load_state_dict(ckpt['model_state_dict'])
+        self.min_scale = ckpt['hyperparameters']['min_scale']
+        self.max_scale = ckpt['hyperparameters']['max_scale']
         del ckpt
 
         # Apply transform

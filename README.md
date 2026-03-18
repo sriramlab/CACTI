@@ -68,7 +68,7 @@ python train.py --project <PROJECT_NAME> --model CACTI \
             --embeddings <DATA_DIR>/uciml/obesity/embeddings_colnames_GTEenMLMlarge.npz \
             --log_path <LOG_DIR> \
             --mask_ratio 0.9 --batch_size 128 --epochs 300 \
-            --num_workers 4 --gpus 0 --lr 0.001 \
+            --num_workers 4 --gpus 0 --lr 0.001 --seed 42 \
             --save_path <DATA_DIR>/CACTI-res/<PROJECT_NAME>/CACTI-cp90-ne10-nd4-es64/obesity/obesity-mnar-30  \
             --embed_dim 64 --nencoder 10 --ndecoder 4
 ```
@@ -82,10 +82,20 @@ python train.py --project <PROJECT_NAME> --model CACTI \
             --embeddings <DATA_DIR>/uciml/obesity/embeddings_colnames_GTEenMLMlarge.npz \
             --log_path <LOG_DIR> \
             --mask_ratio 0.9 --batch_size 128 --epochs 300 \
-            --num_workers 4 --gpus 0 --lr 0.001 \
+            --num_workers 4 --gpus 0 --lr 0.001 --seed 42 \
             --save_path <DATA_DIR>/CACTI-res/<PROJECT_NAME>/CACTI-cp90-ne10-nd4-es64/obesity/obesity-mnar-30  \
             --embed_dim 64 --nencoder 10 --ndecoder 4
 ```
+
+To run inference on new data using a previously trained checkpoint (no training):
+``` python
+python train.py --model CACTI \
+            --infer_only \
+            --model_path <LOG_DIR>/CACTI-obesity-mnar-30-1-cpkt/best.pth \
+            --tabular_infer <DATA_DIR>/uciml/obesity/obesity-mnar-30/pval-1.tsv \
+            --save_path <DATA_DIR>/CACTI-res/<PROJECT_NAME>/CACTI-cp90-ne10-nd4-es64/obesity/obesity-mnar-30
+```
+> **Note:** Architecture flags (`--embed_dim`, `--nencoder`, `--ndecoder`, `--mask_ratio`, `--embeddings`, etc.) are not needed — they are restored automatically from the checkpoint. `--tabular` (training data) is also not required.
 
 The following bash script can be used to iterate through all missingness condtions for a particualar dataset:
 
@@ -131,6 +141,63 @@ for mtype in "${scenarios[@]}"; do
 done
 ```
 
+### 🔧 CLI Reference
+
+#### Data
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--tabular` | str | — | Path to training data (`.tsv` or `.npz`) |
+| `--tabular_infer` | str (multiple) | — | Path(s) to held-out data for out-of-sample inference |
+
+#### Model Architecture
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--model` | str | required | Model to run: `CACTI`, `CMAE`, `RMAE`, `RCTXMAE`, `CACTIabl` |
+| `--mask_ratio` | float | — | Copy-mask ratio (required; rec. `0.9`) |
+| `--embed_dim` | int | `32` | Transformer embedding dimension |
+| `--nencoder` | int | `6` | Number of encoder layers |
+| `--ndecoder` | int | `4` | Number of decoder layers |
+| `--embeddings` | str | — | Path to precomputed column embeddings `.npz` (required for CACTI, RCTXMAE) |
+| `--cembed_size` | int | — | Column embedding size (auto-detected from file if not set) |
+| `--context_size` | int | — | Override context window size |
+
+#### Training
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--epochs` | int | `100` | Total training epochs |
+| `--warmup_epochs` | int | `50` | Linear LR warmup epochs |
+| `--lr` | float | `0.001` | Peak learning rate |
+| `--min_lr` | float | `5e-6` | Minimum LR at end of cosine annealing |
+| `--weight_decay` | float | `0.001` | AdamW weight decay |
+| `--grad_clip` | float | `5.0` | Gradient clipping norm |
+| `--batch_size` | int | `128` | Training batch size |
+| `--num_workers` | int | `0` | DataLoader worker processes |
+| `--pval` | float | — | Fraction of training data held out as validation for best-checkpoint selection (rec. `0.1` for in-sample imputation) |
+| `--seed` | int | `42` | Global RNG seed for reproducibility |
+| `--precision` | str | `32-true` | Floating point precision |
+
+#### Checkpointing
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--checkpoint_id` | str | — | Checkpoint name/ID (required for train+eval mode) |
+| `--log_path` | str | — | Directory to save checkpoints (required for train+eval mode) |
+
+#### Run Modes
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--train_only` | flag | `False` | Train without running inference |
+| `--infer_only` | flag | `False` | Skip training; load a saved checkpoint and run inference only. Model architecture and training args are restored from the checkpoint — do **not** pass architecture flags (`--embed_dim`, `--nencoder`, etc.) as they are ignored |
+| `--model_path` | str | — | Path to saved `.pth` checkpoint (required with `--infer_only`) |
+
+#### Output
+| Flag | Type | Default | Description |
+|------|------|---------|-------------|
+| `--save_path` | str | — | Directory to write imputed output files (suffix `-predicted.tsv`) |
+| `--project` | str | — | Project name for logging |
+| `--gpus` | str | `0` | GPU device ID(s) |
+
+---
+
 ### 🔬 Calculate imputation metrics
 
 To calculate the final imputation performacne metrics use the following script:
@@ -147,11 +214,17 @@ python tools/uci_scoreeval.py --data_path <DATA_DIR>/uciml/ \
 ## 📚 Citation
 If you use this software in your research or find some of the key contributions of this work helpful, please cite our work as follows:
 ```bibtex
-@inproceedings{gorla2025cacti,
-  title = {CACTI: Leveraging Copy Masking and Contextual Information to Improve Tabular Data Imputation},
-  author = {Aditya Gorla and Ryan Wang and Zhengtong Liu and Ulzee An and Sriram Sankararaman},
-  booktitle = {Proceedings of the 42nd International Conference on Machine Learning (ICML)},
-  year = {2025}
+@InProceedings{gorla2025cacti,
+  title     = {{CACTI}: Leveraging Copy Masking and Contextual Information to Improve Tabular Data Imputation},
+  author    = {Gorla, Aditya and Wang, Ryan and Liu, Zhengtong and An, Ulzee and Sankararaman, Sriram},
+  booktitle = {Proceedings of the 42nd International Conference on Machine Learning},
+  pages     = {20187--20225},
+  year      = {2025},
+  volume    = {267},
+  series    = {Proceedings of Machine Learning Research},
+  month     = {13--19 Jul},
+  publisher = {PMLR},
+  url       = {https://proceedings.mlr.press/v267/gorla25a.html}
 }
 ```
 

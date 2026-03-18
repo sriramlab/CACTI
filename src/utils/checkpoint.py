@@ -26,8 +26,8 @@ class CheckpointHandler:
             'hyperparameters' : self.hyperparameters
         }, checkpoint_path)
 
-        # Create a symlink called "last" pointing to the latest checkpoint
-        symlink_path = os.path.join(self.checkpoint_dir, "last.pth")
+        # Create a symlink called "best" pointing to the best checkpoint
+        symlink_path = os.path.join(self.checkpoint_dir, "best.pth")
         if os.path.islink(symlink_path):
             os.remove(symlink_path)
         os.symlink(checkpoint_path, symlink_path)

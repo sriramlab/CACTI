@@ -19,7 +19,7 @@ from src.utils.training_helpers import _worker_init_fn
 
 
 
-__version__ = "1.0.0"
+__version__ = "1.0.1"
 
 class RandomContextMAE:
     def __init__(self, args, **kwargs):
@@ -90,6 +90,7 @@ class RandomContextMAE:
             'device': self.device,
             'num_workers': self.num_workers,
             'eps': self.eps,
+            'args': self.args,
             'model_hyperparameters': model_hyperparameters
         }
 
@@ -130,7 +131,7 @@ class RandomContextMAE:
         # Load checkpoint if resuming
         start_epoch = 0
         if resume_from_checkpoint:
-            checkpoint_path = os.path.join(self.checkpoint_path, "last.pth")
+            checkpoint_path = os.path.join(self.checkpoint_path, "best.pth")
             if os.path.exists(checkpoint_path):
                 start_epoch = self.checkpoint_handler.load_checkpoint(checkpoint_path, self.optimizer)
 
@@ -202,7 +203,7 @@ class RandomContextMAE:
 
         # Warn if no checkpoint was saved
         if self.checkpoint_handler is not None:
-            symlink_path = os.path.join(self.checkpoint_handler.checkpoint_dir, "last.pth")
+            symlink_path = os.path.join(self.checkpoint_handler.checkpoint_dir, "best.pth")
             if not os.path.exists(symlink_path):
                 warnings.warn(f"No checkpoint was saved during training. Model never improved after warmup epoch {self.warmup_epochs}. Consider reducing --warmup_epochs.")
 
@@ -274,12 +275,15 @@ class RandomContextMAE:
         self.min_scale = obs_dict['minscale']
         self.max_scale = obs_dict['maxscale']
 
+        if self.checkpoint_handler is not None:
+            self.checkpoint_handler.hyperparameters = self.get_hyperparameters()
+
         # Fit
         _ = self.fit(obs_data)
 
         # Infer with best loss model; if exists
         if self.checkpoint_handler is not None:
-            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/last.pth")
+            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/best.pth")
             self.model.load_state_dict(best_ckpt['model_state_dict'])
             print(f"Loaded best checkpoint model from Epoch {best_ckpt['epoch']}")
             del best_ckpt

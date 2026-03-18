@@ -29,11 +29,11 @@ def args_parser():
     parser.add_argument('--weight_decay', type=float, default=0.001)
     parser.add_argument('--enable_wandb', action='store_true', default=False) 
     parser.add_argument('--table_size', type=int, default=372)
-    parser.add_argument('--resume_checkpoint', type=str, default=None)
     parser.add_argument('--train_only', action='store_true', default=False)
+    parser.add_argument('--infer_only', action='store_true', default=False, help='Run inference only using a saved model')
+    parser.add_argument('--model_path', type=str, default=None, help='Path to saved model checkpoint for inference')
     parser.add_argument('--log_path', type=str, default=None)
     parser.add_argument('--checkpoint_id', type=str, default=None)
-    parser.add_argument('--binary_map', type=str, default=None)
     parser.add_argument('--context_size', type=int, default=None)
     parser.add_argument('--mask_ratio', type=float, default=None)
     parser.add_argument('--embed_dim', type=int, default=32)
@@ -158,6 +158,31 @@ def load_model(args, data_dict):
 
     return model
 
+def load_saved_model(args):
+    """
+    Loads a saved model checkpoint and prepares it for inference.
+    """
+    if not args.model_path or not os.path.exists(args.model_path):
+        raise ValueError("Model path not provided or does not exist!")
+
+    checkpoint = torch.load(args.model_path, map_location=args.device)
+
+    tmp_data_dict = {'colnames': checkpoint['hyperparameters']['feats']}
+
+    # Initialize model architecture from saved args
+    model = load_model(checkpoint['hyperparameters']['args'], tmp_data_dict)
+    model.model.load_state_dict(checkpoint['model_state_dict'])
+
+    # Restore training scales
+    model.min_scale = checkpoint['hyperparameters']['min_scale']
+    model.max_scale = checkpoint['hyperparameters']['max_scale']
+
+    # Set device and eval mode
+    model.device = args.device
+    model.model.eval()
+
+    return model
+
 def train_model(model, data_dict):
     torch.set_float32_matmul_precision('medium')
 
@@ -178,41 +203,36 @@ if __name__ == "__main__":
 
     setup_environment(args)
 
-    data_dict = load_data(args)
-
-    model = load_model(args, data_dict)
-
-    # TRIAN only 
-    if args.train_only and args.resume_checkpoint is None:
-        Model = train_model(model, data_dict)
-    elif args.train_only and args.resume_checkpoint:
-        # FIXME: enable resume for ckpt
-        raise NotImplementedError
-        # trainer = resume_training(args, model, loaders)
-
-    # TRAIN and INFER
-    elif not args.train_only and args.resume_checkpoint is None:
-        if args.checkpoint_path is None:
-            raise ValueError("--checkpoint_id and --log_path are required for train+eval mode!")
-        Model, imputed_data = train_eval(model, data_dict)
-    elif not args.train_only and args.resume_checkpoint:
-        # FIXME: enable resume for ckpt
-        raise NotImplementedError
-        # trainer = resume_training(args, model, loaders)
+    # Inference only
+    if args.infer_only:
+        if not args.model_path:
+            raise ValueError("Model path must be provided for inference_only mode!")
+        model = load_saved_model(args)
     else:
-        raise ValueError("---No checkpoint to resume---")
+        data_dict = load_data(args)
 
-    # SAVE train data imputed values
-    if args.save_path:
-        save_predictions(imputed_data, data_dict['colnames'], 
-            args.save_path, data_dict['fname'])
+        model = load_model(args, data_dict)
 
+        # TRAIN only
+        if args.train_only:
+            model = train_model(model, data_dict)
+
+        # TRAIN and INFER
+        else:
+            if args.checkpoint_path is None:
+                raise ValueError("--checkpoint_id and --log_path are required for train+eval mode!")
+            model, imputed_data = train_eval(model, data_dict)
+
+        # SAVE train data imputed values
+        if args.save_path and not args.train_only:
+            save_predictions(imputed_data, data_dict['colnames'],
+                args.save_path, data_dict['fname'])
 
     # Inference on eval data (eg. val splits)
     if args.tabular_infer:
         for infer_data_path in args.tabular_infer:
             data_eval_dict = load_eval_data(infer_data_path)
-            imputed_eval = Model.transform(data_eval_dict['data'])
+            imputed_eval = model.transform(data_eval_dict['data'])
 
             if args.save_path:
                 save_predictions(imputed_eval, data_eval_dict['colnames'],
