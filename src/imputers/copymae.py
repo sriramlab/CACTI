@@ -17,7 +17,7 @@ from src.utils.summary import ModelSummary
 from src.utils.training_helpers import train_test_split_indices, _worker_init_fn
 
 
-__version__ = "1.1.0"
+__version__ = "1.1.1"
 
 class CopyMAE:
     def __init__(self, args, **kwargs):
@@ -348,7 +348,16 @@ class CopyMAE:
         if self.checkpoint_handler:
             self.checkpoint_handler.hyperparameters = self.get_hyperparameters()
 
-        return self.fit(obs_data)
+        self.fit(obs_data)
+
+        # Infer with best loss model; if exists
+        if self.checkpoint_handler is not None:
+            best_ckpt = torch.load(f"{self.checkpoint_handler.checkpoint_dir}/best.pth")
+            self.model.load_state_dict(best_ckpt['model_state_dict'])
+            print(f"[train_model] Loaded best checkpoint from Epoch {best_ckpt['epoch']}")
+            del best_ckpt
+
+        return self
 
     def load_transform(self, checkpoint_path, obs_data):
         if isinstance(obs_data, np.ndarray):
